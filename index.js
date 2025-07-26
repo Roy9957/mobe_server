@@ -104,7 +104,7 @@ app.get('/track/:linkId', (req, res) => {
       linkData.campaign = campaign;
     }
     
-    res.redirect('https://mobe-link-share.web.app');
+    res.redirect('https://share-bug2.onrender.com');
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Internal server error' });
