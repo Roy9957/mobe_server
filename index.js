@@ -1,66 +1,52 @@
+require('dotenv').config();
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const { Pool } = require('pg');
+
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-// In-memory storage with auto-cleanup
-const links = new Map();
-
-// Cleanup expired links every hour
-setInterval(() => {
-  const now = new Date();
-  for (const [linkId, linkData] of links) {
-    if (now > linkData.expires) {
-      links.delete(linkId);
-    }
-  }
-  console.log(`Cleaned up expired links. Current links: ${links.size}`);
-}, 60 * 60 * 1000); // Every hour
+// PostgreSQL Pool
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 // Middleware
 app.use(express.json());
-
-// Enhanced CORS Configuration
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
 
-// Rate limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 100
 });
 app.use(limiter);
 
-// Generate a new tracking link with enhanced features
-app.post('/api/links', (req, res) => {
+// 🟢 CREATE NEW LINK
+app.post('/api/links', async (req, res) => {
   try {
     const { expiresInHours = 24, campaign = 'default' } = req.body;
-    
-    // Validate input
     if (isNaN(expiresInHours) || expiresInHours < 1) {
       return res.status(400).json({ error: 'expiresInHours must be a number greater than 0' });
     }
 
     const linkId = uuidv4().split('-')[0];
+    const createdAt = new Date();
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + parseInt(expiresInHours));
-    
-    links.set(linkId, {
-      id: linkId,
-      created: new Date(),
-      expires: expiresAt,
-      clicks: 0,
-      uniqueClicks: 0,
-      clickers: new Set(),
-      campaign,
-      lastAccessed: null
-    });
-    
+
+    await pool.query(
+      `INSERT INTO links (id, created, expires, clicks, unique_clicks, clickers, campaign, last_accessed)
+       VALUES ($1, $2, $3, 0, 0, ARRAY[]::TEXT[], $4, NULL)`,
+      [linkId, createdAt, expiresAt, campaign]
+    );
+
     res.json({
       url: `${req.protocol}://${req.get('host')}/track/${linkId}?campaign=${campaign}`,
       id: linkId,
@@ -74,36 +60,42 @@ app.post('/api/links', (req, res) => {
   }
 });
 
-// Enhanced tracking with campaign support
-app.get('/track/:linkId', (req, res) => {
+// 🟢 TRACK LINK
+app.get('/track/:linkId', async (req, res) => {
   try {
     const { linkId } = req.params;
     const { campaign } = req.query;
-    const linkData = links.get(linkId);
-    
-    if (!linkData) {
+    const result = await pool.query(`SELECT * FROM links WHERE id=$1`, [linkId]);
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Invalid tracking link' });
     }
-    
+
+    const linkData = result.rows[0];
     if (new Date() > linkData.expires) {
       return res.status(410).json({ error: 'Tracking link has expired' });
     }
-    
+
     const clientId = req.ip + req.headers['user-agent'];
-    
-    // Update stats
-    linkData.clicks++;
-    linkData.lastAccessed = new Date();
-    if (!linkData.clickers.has(clientId)) {
-      linkData.uniqueClicks++;
-      linkData.clickers.add(clientId);
+    let uniqueClicks = linkData.unique_clicks;
+    let clickers = linkData.clickers || [];
+
+    if (!clickers.includes(clientId)) {
+      uniqueClicks++;
+      clickers.push(clientId);
     }
-    
-    // Update campaign if provided
-    if (campaign) {
-      linkData.campaign = campaign;
-    }
-    
+
+    await pool.query(
+      `UPDATE links 
+       SET clicks = clicks + 1,
+           unique_clicks = $1,
+           clickers = $2,
+           campaign = $3,
+           last_accessed = $4
+       WHERE id=$5`,
+      [uniqueClicks, clickers, campaign || linkData.campaign, new Date(), linkId]
+    );
+
     res.redirect('https://share-bug2.onrender.com');
   } catch (err) {
     console.error(err);
@@ -111,29 +103,30 @@ app.get('/track/:linkId', (req, res) => {
   }
 });
 
-// Enhanced stats endpoint
-app.get('/api/links/:linkId', (req, res) => {
+// 🟢 GET LINK STATS
+app.get('/api/links/:linkId', async (req, res) => {
   try {
     const { linkId } = req.params;
-    const linkData = links.get(linkId);
-    
-    if (!linkData) {
+    const result = await pool.query(`SELECT * FROM links WHERE id=$1`, [linkId]);
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Link not found' });
     }
-    
-    const timeRemaining = Math.max(0, linkData.expires - new Date());
-    
+
+    const linkData = result.rows[0];
+    const timeRemaining = Math.max(0, new Date(linkData.expires) - new Date());
+
     res.json({
       id: linkData.id,
       clicks: linkData.clicks,
-      uniqueClicks: linkData.uniqueClicks,
+      uniqueClicks: linkData.unique_clicks,
       created: linkData.created,
       expires: linkData.expires,
-      isActive: new Date() < linkData.expires,
+      isActive: new Date() < new Date(linkData.expires),
       campaign: linkData.campaign,
-      lastAccessed: linkData.lastAccessed,
+      lastAccessed: linkData.last_accessed,
       timeRemaining: `${Math.floor(timeRemaining / (1000 * 60 * 60))} hours ${Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60))} minutes`,
-      clickThroughRate: linkData.clicks > 0 ? (linkData.uniqueClicks / linkData.clicks * 100).toFixed(2) + '%' : '0%'
+      clickThroughRate: linkData.clicks > 0 ? (linkData.unique_clicks / linkData.clicks * 100).toFixed(2) + '%' : '0%'
     });
   } catch (err) {
     console.error(err);
@@ -141,19 +134,20 @@ app.get('/api/links/:linkId', (req, res) => {
   }
 });
 
-// New endpoint: Get all links (for dashboard)
-app.get('/api/links', (req, res) => {
+// 🟢 GET ALL LINKS
+app.get('/api/links', async (req, res) => {
   try {
-    const allLinks = Array.from(links.values()).map(link => ({
+    const result = await pool.query(`SELECT * FROM links`);
+    const allLinks = result.rows.map(link => ({
       id: link.id,
       created: link.created,
       expires: link.expires,
       clicks: link.clicks,
-      uniqueClicks: link.uniqueClicks,
+      uniqueClicks: link.unique_clicks,
       campaign: link.campaign,
-      isActive: new Date() < link.expires
+      isActive: new Date() < new Date(link.expires)
     }));
-    
+
     res.json({
       count: allLinks.length,
       active: allLinks.filter(link => link.isActive).length,
@@ -165,8 +159,7 @@ app.get('/api/links', (req, res) => {
   }
 });
 
-// Start server
+// START SERVER
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
 });
-
