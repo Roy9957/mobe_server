@@ -4,13 +4,14 @@ const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const admin = require('firebase-admin');
-const serviceAccount = require('./serviceAccountKey.json'); // তোমার serviceAccount JSON
+const admin = require('firebase-admin');
+const serviceAccount = require('./serviceAccountKey.json');
 
-// Firebase Initialize
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: process.env.FIREBASE_DB_URL // .env এ https://your-db-url.firebaseio.com লিখো
+  databaseURL: "https://fish-ac9ba-default-rtdb.asia-southeast1.firebasedatabase.app"
 });
+
 
 const db = admin.database();
 
