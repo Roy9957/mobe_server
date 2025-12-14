@@ -4,15 +4,13 @@ const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const admin = require('firebase-admin');
-const admin = require('firebase-admin');
-const serviceAccount = require('./serviceAccountKey.json');
+const serviceAccount = require('./serviceAccountKey.json'); // তোমার Firebase service account key
 
+// Firebase init
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://fish-ac9ba-default-rtdb.asia-southeast1.firebasedatabase.app"
 });
-
-
 const db = admin.database();
 
 const app = express();
@@ -76,14 +74,10 @@ app.get('/track/:linkId', async (req, res) => {
     const linkRef = db.ref('links/' + linkId);
     const snapshot = await linkRef.get();
 
-    if (!snapshot.exists()) {
-      return res.status(404).json({ error: 'Invalid tracking link' });
-    }
+    if (!snapshot.exists()) return res.status(404).json({ error: 'Invalid tracking link' });
 
     const linkData = snapshot.val();
-    if (new Date() > new Date(linkData.expires)) {
-      return res.status(410).json({ error: 'Tracking link has expired' });
-    }
+    if (new Date() > new Date(linkData.expires)) return res.status(410).json({ error: 'Tracking link has expired' });
 
     const clientId = req.ip + req.headers['user-agent'];
     let uniqueClicks = linkData.uniqueClicks;
@@ -116,9 +110,7 @@ app.get('/api/links/:linkId', async (req, res) => {
     const linkRef = db.ref('links/' + linkId);
     const snapshot = await linkRef.get();
 
-    if (!snapshot.exists()) {
-      return res.status(404).json({ error: 'Link not found' });
-    }
+    if (!snapshot.exists()) return res.status(404).json({ error: 'Link not found' });
 
     const linkData = snapshot.val();
     const timeRemaining = Math.max(0, new Date(linkData.expires) - new Date());
