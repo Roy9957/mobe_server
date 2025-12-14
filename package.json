@@ -1,17 +1,16 @@
 {
-  "name": "neon-link-tracker",
+  "name": "MOBE SERVER",
   "version": "1.0.0",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "express-rate-limit": "^7.1.0",
-    "firebase-admin": "^11.11.0",
-    "uuid": "^9.0.1"
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "express-rate-limit": "^6.7.0",
+    "firebase-admin": "^12.2.0",
+    "uuid": "^9.0.0"
   }
 }
