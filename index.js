@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 const admin = require('firebase-admin');
-const serviceAccount = require('./fish-ac9ba-firebase-adminsdk-fbsvc-691b56edfb.json'); // তোমার serviceAccount JSON
+const serviceAccount = require('./serviceAccountKey.json'); // তোমার serviceAccount JSON
 
 // Firebase Initialize
 admin.initializeApp({
