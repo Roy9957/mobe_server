@@ -3,16 +3,19 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
-const { Pool } = require('pg');
+const admin = require('firebase-admin');
+const serviceAccount = require('./fish-ac9ba-firebase-adminsdk-fbsvc-691b56edfb.json'); // তোমার serviceAccount JSON
+
+// Firebase Initialize
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: process.env.FIREBASE_DB_URL // .env এ https://your-db-url.firebaseio.com লিখো
+});
+
+const db = admin.database();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-
-// PostgreSQL Pool
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
-});
 
 // Middleware
 app.use(express.json());
@@ -41,11 +44,15 @@ app.post('/api/links', async (req, res) => {
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + parseInt(expiresInHours));
 
-    await pool.query(
-      `INSERT INTO links (id, created, expires, clicks, unique_clicks, clickers, campaign, last_accessed)
-       VALUES ($1, $2, $3, 0, 0, ARRAY[]::TEXT[], $4, NULL)`,
-      [linkId, createdAt, expiresAt, campaign]
-    );
+    await db.ref('links/' + linkId).set({
+      id: linkId,
+      created: createdAt.toISOString(),
+      expires: expiresAt.toISOString(),
+      clicks: 0,
+      uniqueClicks: 0,
+      clickers: [],
+      campaign
+    });
 
     res.json({
       url: `${req.protocol}://${req.get('host')}/track/${linkId}?campaign=${campaign}`,
@@ -65,19 +72,20 @@ app.get('/track/:linkId', async (req, res) => {
   try {
     const { linkId } = req.params;
     const { campaign } = req.query;
-    const result = await pool.query(`SELECT * FROM links WHERE id=$1`, [linkId]);
+    const linkRef = db.ref('links/' + linkId);
+    const snapshot = await linkRef.get();
 
-    if (result.rows.length === 0) {
+    if (!snapshot.exists()) {
       return res.status(404).json({ error: 'Invalid tracking link' });
     }
 
-    const linkData = result.rows[0];
-    if (new Date() > linkData.expires) {
+    const linkData = snapshot.val();
+    if (new Date() > new Date(linkData.expires)) {
       return res.status(410).json({ error: 'Tracking link has expired' });
     }
 
     const clientId = req.ip + req.headers['user-agent'];
-    let uniqueClicks = linkData.unique_clicks;
+    let uniqueClicks = linkData.uniqueClicks;
     let clickers = linkData.clickers || [];
 
     if (!clickers.includes(clientId)) {
@@ -85,16 +93,13 @@ app.get('/track/:linkId', async (req, res) => {
       clickers.push(clientId);
     }
 
-    await pool.query(
-      `UPDATE links 
-       SET clicks = clicks + 1,
-           unique_clicks = $1,
-           clickers = $2,
-           campaign = $3,
-           last_accessed = $4
-       WHERE id=$5`,
-      [uniqueClicks, clickers, campaign || linkData.campaign, new Date(), linkId]
-    );
+    await linkRef.update({
+      clicks: linkData.clicks + 1,
+      uniqueClicks,
+      clickers,
+      campaign: campaign || linkData.campaign,
+      lastAccessed: new Date().toISOString()
+    });
 
     res.redirect('https://share-bug2.onrender.com');
   } catch (err) {
@@ -107,26 +112,27 @@ app.get('/track/:linkId', async (req, res) => {
 app.get('/api/links/:linkId', async (req, res) => {
   try {
     const { linkId } = req.params;
-    const result = await pool.query(`SELECT * FROM links WHERE id=$1`, [linkId]);
+    const linkRef = db.ref('links/' + linkId);
+    const snapshot = await linkRef.get();
 
-    if (result.rows.length === 0) {
+    if (!snapshot.exists()) {
       return res.status(404).json({ error: 'Link not found' });
     }
 
-    const linkData = result.rows[0];
+    const linkData = snapshot.val();
     const timeRemaining = Math.max(0, new Date(linkData.expires) - new Date());
 
     res.json({
       id: linkData.id,
       clicks: linkData.clicks,
-      uniqueClicks: linkData.unique_clicks,
+      uniqueClicks: linkData.uniqueClicks,
       created: linkData.created,
       expires: linkData.expires,
       isActive: new Date() < new Date(linkData.expires),
       campaign: linkData.campaign,
-      lastAccessed: linkData.last_accessed,
+      lastAccessed: linkData.lastAccessed,
       timeRemaining: `${Math.floor(timeRemaining / (1000 * 60 * 60))} hours ${Math.floor((timeRemaining % (1000 * 60 * 60)) / (1000 * 60))} minutes`,
-      clickThroughRate: linkData.clicks > 0 ? (linkData.unique_clicks / linkData.clicks * 100).toFixed(2) + '%' : '0%'
+      clickThroughRate: linkData.clicks > 0 ? (linkData.uniqueClicks / linkData.clicks * 100).toFixed(2) + '%' : '0%'
     });
   } catch (err) {
     console.error(err);
@@ -137,21 +143,23 @@ app.get('/api/links/:linkId', async (req, res) => {
 // 🟢 GET ALL LINKS
 app.get('/api/links', async (req, res) => {
   try {
-    const result = await pool.query(`SELECT * FROM links`);
-    const allLinks = result.rows.map(link => ({
+    const snapshot = await db.ref('links').get();
+    const allLinks = snapshot.exists() ? Object.values(snapshot.val()) : [];
+
+    const links = allLinks.map(link => ({
       id: link.id,
       created: link.created,
       expires: link.expires,
       clicks: link.clicks,
-      uniqueClicks: link.unique_clicks,
+      uniqueClicks: link.uniqueClicks,
       campaign: link.campaign,
       isActive: new Date() < new Date(link.expires)
     }));
 
     res.json({
-      count: allLinks.length,
-      active: allLinks.filter(link => link.isActive).length,
-      links: allLinks
+      count: links.length,
+      active: links.filter(link => link.isActive).length,
+      links
     });
   } catch (err) {
     console.error(err);
